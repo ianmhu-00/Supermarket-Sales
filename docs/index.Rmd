@@ -1,0 +1,843 @@
+---
+title: "Analysis and Visualization of Super Market Data"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+urlcolor: blue
+---
+
+# Introduction
+Purpose: In this project, I seek to uncover relationships among variables such as Gender, Product Type, Membership Type, Branch, Payment Type, and Gross Income. I want to find out which branches are busy at which times, which product lines and payment types are popular among certain customer types (through both transaction quantity and sales volume), and conduct customer segmentation to better understand the market demographics to derive clear insights and provide recommendations. Lastly, I look to further my skills in reporting & communication, R & RMarkdown, and data analysis & visualization.
+
+Dataset: "Super Market Sales" from [Kaggle.com](https://www.kaggle.com/datasets/arunjangir245/super-market-sales): 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd('C:/Users/ianmh/OneDrive/Desktop/Shortcuts!/Programming/Supermarket Sales')
+```
+
+# Libraries and Data
+```{r, results='hide', message=FALSE, warning=FALSE}
+# Load required libraries
+require(ggplot2)
+require(ggthemes)
+require(ggpubr)
+
+# Load data
+supermarket_sales_raw <- read.csv('supermarket_sales.csv', stringsAsFactors=FALSE)
+```
+
+
+# Exploratory Data Analysis
+Starting with the summary of variables, we see that we have **17 variables**, of which there are **9 characters**, **6 doubles**, and **1 integer**. The variables are summarized as below: \
+
+* **Invoice.ID**: A unique identification of a purchase
+* **Branch**: Identifier of which branch the purchase was made at (A, B, or C)
+* **City**: Identifier of which City the purchas was made at (Yangon, Napyitaw, and Mandalay, which correspond to branches A, B, and C, respectively)
+* **Customer.type**: Designation of purchase made by a member or non-member
+* **Gender**: Gender of customer
+* **Product.line**: Product category of purchase
+* **Unit.price**: Unit price of product
+* **Quantity**: Quantity of product purchased
+* **Tax.5**: 5% tax on purchase
+* **Total**: Total cost of purchase, including tax
+* **Date**: Date of purchase
+* **Time**: Time of purchase
+* **Payment**: Payment type of purchase (Ewallet, Cash, or Credit Card)
+* **cogs**: Cost of goods sold
+* **gross.margin.percentage**: Difference between Total and cogs, expressed as a percent
+* **gross.income**: Difference between Total and cogs, expressed in $ form
+* **Rating**: Rating of the product, on a scale from 0 to 10
+
+```{r, echo=FALSE}
+# Summary Statistics
+summary(supermarket_sales_raw)
+```
+
+Note that gross margin percentage is the same across all invoices. That is, to say, each item is marked up the same percentage after calculating direct costs (labor, materials, etc.) \
+Let's take a quick look at the data, variable types, and unique values of categorical variables. Let's also check the number of NA values and duplicates using the variable **Invoice.ID**. \
+
+<details>
+  <summary>Click for code</summary>
+  ```
+head(supermarket_sales_raw, 5)
+sapply(supermarket_sales_raw, typeof)
+
+sapply(supermarket_sales_raw[, c('Branch', 'City', 'Customer.type', 'Gender', 'Product.line', 'Payment')], unique)
+
+count_na <- sum(is.na(supermarket_sales_raw))
+count_duplicates <- sum(data.frame(table(supermarket_sales_raw$Invoice.ID))$Freq>1)
+  ```
+</details>
+
+```{r, echo=FALSE}
+head(supermarket_sales_raw, 5)
+sapply(supermarket_sales_raw, typeof)
+
+sapply(supermarket_sales_raw[, c('Branch', 'City', 'Customer.type', 'Gender', 'Product.line', 'Payment')], unique)
+```
+
+```{r, echo=FALSE}
+# Data Cleaning
+# look for missing values, NAs, duplicates
+count_na <- sum(is.na(supermarket_sales_raw))
+count_duplicates <- sum(data.frame(table(supermarket_sales_raw$Invoice.ID))$Freq>1)
+```
+\
+There are `r count_na` NA values and `r count_duplicates` duplicate Invoice IDs in this dataset. Let's convert the variable Date into a Date format, in addition to creating the variables Hour, Day, Month, and Year using a substring of the variable Time and extracting the day, month, and year from our newly converted Date variable. We will convert our newly created variables to the Integer type. \
+
+```{r}
+# change Date from character to date
+sales_data <- supermarket_sales_raw
+sales_data$Date <- as.Date(supermarket_sales_raw$Date, format='%m/%d/%y')
+
+# create hour, day, month, and year variables
+sales_data$Hour <- as.integer(substr(sales_data$Time, 1, 2))
+sales_data$Day <- as.integer(format(sales_data$Date, format='%d'))
+sales_data$Month <- as.integer(format(sales_data$Date, format='%m'))
+sales_data$Year <- as.integer(format(sales_data$Date, format='%Y'))
+```
+\pagebreak
+# Preliminary Exploratory Data Analysis
+## Ratings by Branch
+```{r, echo=FALSE}
+average_ratings <- aggregate(sales_data$Rating, by=list(Branch=sales_data$Branch), FUN=mean)
+average_ratings_text <- sub("(.*),", "\\1, and", paste(round(average_ratings$x, 2), collapse = ", "))
+```
+We begin by analyzing ratings by branch. \
+We see that ratings are roughly equal across branches, with branch rating averages of `r average_ratings_text` for branches A, B, and C, respectively. Additionally, each branch shares a minimum rating of 4 and a maximum rating of 10. \
+
+<details>
+  <summary>Click for code</summary>
+  ```
+average_ratings <- aggregate(sales_data$Rating, by=list(Branch=sales_data$Branch), FUN=mean)
+
+ggplot(data=sales_data, aes(x=Branch, y=Rating, fill=Branch)) +
+  geom_boxplot(color='black') +
+  scale_y_continuous(breaks=seq(3,10.5,1), limits=c(3,11)) +
+  scale_fill_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  guides(fill='none') +
+  labs(title='Ratings by Branch') +
+  theme_clean()
+  ```
+</details>
+
+```{r, echo=FALSE}
+## Branch Info
+# Ratings by Branch
+
+ggplot(data=sales_data, aes(x=Branch, y=Rating, fill=Branch)) +
+  geom_boxplot(color='black') +
+  scale_y_continuous(breaks=seq(3,10.5,1), limits=c(3,11)) +
+  scale_fill_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  guides(fill='none') +
+  labs(title='Ratings by Branch') +
+  theme_clean()
+```
+
+## Average Transactions per Day \
+Now analyzing transactions per day, we utilize **Invoice.ID** as a unique identifier for each transaction. We first count total transactions per day, per branch, in addition to taking the mean of **Quantity** per transaction by **Branch** to get an idea of the average number of items purchased in each transaction. \
+
+```{r, echo=FALSE}
+transactions_per_day <- aggregate(Invoice.ID ~ Date + Branch, data=sales_data, FUN=length)
+min_transactions <- aggregate(sales_data$Quantity, by=list(Branch=sales_data$Branch), FUN=min)
+min_transactions_text <- sub("(.*),", "\\1, and", paste(min_transactions$x, collapse = ", "))
+max_transactions <- aggregate(sales_data$Quantity, by=list(Branch=sales_data$Branch), FUN=max)
+max_transactions_text <- sub("(.*),", "\\1, and", paste(max_transactions$x, collapse = ", "))
+avg_quantity <- aggregate(Quantity ~ Branch, data=sales_data, FUN=mean)
+avg_quantity_text <- paste('[',paste(round(avg_quantity$Quantity, 2), collapse=", "), ']', sep='')
+```
+
+To preface, the minimum transactions per day for branches A, B, and C are `r min_transactions_text`, and the maximum are `r max_transactions_text` respectively. The graph below, however, smooths the number of transactions per day to get a better picture of transaction trends over time. Given that the average quantity per transaction (over the course of the 3 months' worth of data) is `r avg_quantity_text` for branches A, B, and C, respectively, we can see a general trend of increases in the quantity of transactions per day for all branches throughout January. However, branches A and C declined somewhat during February, and in March, only branch A made a superb recovery, while branch B severely declined and branch C remained relatively steady. \
+
+<details>
+  <summary>Click for code</summary>
+  ```
+transactions_per_day <- aggregate(Invoice.ID ~ Date + Branch, data=sales_data, FUN=length)
+avg_quantity <- aggregate(Quantity ~ Branch, data=sales_data, FUN=mean)
+ggplot(data=transactions_per_day, aes(x=Date, y=Invoice.ID, color=Branch)) +
+  geom_smooth(method='loess', se=FALSE) +
+  scale_color_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  labs(title='Transactions per Day',
+       subtitle=subtitle_caption,
+       x='Month', y='Transaction Count') +
+  theme_clean()
+  ```
+</details>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Sales by Branch
+ggplot(data=transactions_per_day, aes(x=Date, y=Invoice.ID, color=Branch)) +
+  geom_smooth(method='loess', se=FALSE) +
+  scale_color_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  labs(title='Transactions per Day',
+       x='Month', y='Transaction Count') +
+  theme_clean()
+
+```
+
+## Cumulative Gross Income by Branch
+Taking the **cumulative gross income** by branch, we see that all branches remained relatively linear in capturing gross income. At the end of the 3 months, branch C acquired the greatest cumulative gross income, followed by branches B and A.
+\
+
+<details>
+  <summary>Click for code</summary>
+```
+# Cumulative Gross Income by Branch
+cumsum.df <- sales_data[order(sales_data$Branch, sales_data$Date), c('Branch', 'Date', 'gross.income')]
+cumsum.df$CumSum <- ave(cumsum.df$gross.income, cumsum.df$Branch, FUN=cumsum)
+
+ggplot(data=cumsum.df, aes(x=Date, y=CumSum, color=Branch)) +
+  geom_line() +
+  scale_color_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  labs(title='Cumulative Gross Profit per Branch',
+       x='Month', y='Gross Profit') +
+  scale_y_continuous(breaks=seq(0,6000,500)) +
+  theme_clean()
+```
+</details>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Cumulative Gross Income by Branch
+cumsum.df <- sales_data[order(sales_data$Branch, sales_data$Date), c('Branch', 'Date', 'gross.income')]
+cumsum.df$CumSum <- ave(cumsum.df$gross.income, cumsum.df$Branch, FUN=cumsum)
+
+ggplot(data=cumsum.df, aes(x=Date, y=CumSum, color=Branch)) +
+  geom_line() +
+  scale_color_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  labs(title='Cumulative Gross Income per Branch',
+       x='Month', y='Gross Profit') +
+  scale_y_continuous(breaks=seq(0,6000,500)) +
+  theme_clean()
+```
+
+```{r, echo=FALSE}
+transaction_count <- aggregate(sales_data$Invoice.ID, by=list(Hour=sales_data$Hour,
+                                                       Branch=sales_data$Branch), FUN=length)
+min_max_transaction <- aggregate(transaction_count$x ~ Branch, data=transaction_count, FUN=function(x) c(min=min(x), max=max(x)))
+```
+
+## Peak Sales Hours
+Looking at the graph below, using **Invoice.ID** as a proxy for transactions, we can see that peak sales hours for branches A, B, and C, are 10am, 7pm, and 10am, with respective transaction counts of 38, 50, and 37. \
+Branch A is generally busy around opening, mid-afternoon, and evening, with less-busy times around 2pm and closing. \
+Branch B is generally busy at 11am, 1pm - 3pm, and 6-10pm, with off-peak hours from 4-5pm. \
+Branch C is relatively equal in business throughout the day, with peaks around opening and 7pm and off-peak at 11am. \
+
+<details>
+  <summary>Click for code</summary>
+```
+# Peak Sales Hours by Branch
+transactions_per_hour <- aggregate(Invoice.ID ~ Hour + Branch, data=sales_data, FUN=length)
+ggplot(data=transactions_per_hour, aes(x=Hour, y=Invoice.ID, color=Branch)) +
+  geom_line() +
+  scale_x_continuous(breaks=seq(10,20,1)) + 
+  labs(title='Peak Sales Hours',
+       x='Hour', y='Transaction Count') +
+  theme_clean()
+```
+</details>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Peak Sales Hours by Branch
+transactions_per_hour <- aggregate(Invoice.ID ~ Hour + Branch, data=sales_data, FUN=length)
+ggplot(data=transactions_per_hour, aes(x=Hour, y=Invoice.ID, color=Branch)) +
+  geom_line() +
+  scale_x_continuous(breaks=seq(10,20,1)) +
+  labs(title='Peak Sales Hours',
+       x='Hour', y='Transaction Count') +
+  theme_clean()
+```
+
+# Customer Base Analysis
+From the graphs below, we can see that the split between members and non-members across all of our branches is roughly equal. Grouping by gender, we can additionally see that we have more female members than males, but more male non-members than females. Furthermore, grouping customer type by store, we can see that we have slight leads in non-members for Branches A and B, however more members shopping at Branch C. Lastly, we see that across all branches, members bring in marginally more gross income than non-members (at their respective branch).
+
+<details>
+  <summary>Click for code</summary>
+  ```
+# Count of Customer Type
+customer.a <- ggplot(data=sales_data, aes(x=Customer.type, fill=Customer.type)) +
+  geom_bar(color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits=c(0, 550),
+                     breaks=seq(0, 550, by=100),
+                     expand=c(0,0)) +
+  labs(title='Count of Customer Type',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Type')) +
+  theme(legend.text=6) +
+  theme_clean() +
+  theme(legend.position="top")
+
+# Customer Type across Gender
+customer.b <- ggplot(data=sales_data, aes(x=Customer.type, fill=Gender)) +
+  geom_bar(position=position_dodge(), color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0, 300),
+                     breaks=seq(0, 300, by=25),
+                     expand=c(0,0)) +
+  labs(title='Customer Type across Gender',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Gender')) +
+  theme(legend.text=6) +
+  theme_clean() +
+  theme(legend.position="top")
+
+# Customer Type per Store
+customer.c <- ggplot(data=sales_data, aes(x=Branch, fill=Customer.type)) +
+  geom_bar(position=position_dodge(), color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)), 
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits=c(0,200),
+                     breaks=seq(0,200,by=25),
+                     expand=c(0,0)) +
+  labs(title='Customer Type per Store',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Type')) +
+  theme_clean() +
+  theme(legend.position="bottom")
+
+# Customer Type on Gross Income, Grouped by Branch
+customer_type <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                            Customer.Type=sales_data$Customer.type), FUN=sum)
+customer.d <- ggplot(data = customer_type, aes(x = Branch, y = x, fill = Customer.Type)) +
+  geom_bar(stat = 'identity', position = position_dodge(), color = 'black') +
+  geom_text(aes(label = round(x, 2)), position = position_dodge(width = 0.95), vjust = -1, size = 3) +
+  scale_fill_manual(values = c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits = c(0, 3000), breaks = seq(0, 3000, by = 500), expand = c(0, 0)) +
+  labs(title = 'Gr. Income by Customer Type',
+       subtitle = 'Grouped by Branch') +
+  guides(fill=guide_legend(title='Type')) +
+  theme_clean() +
+  theme(legend.position="bottom")
+
+ggarrange(customer.a, customer.b,
+          ncol=2, nrow=1)
+ggarrange(customer.c, customer.d,
+          ncol=2)
+  ```
+</details>
+
+```{r, echo=FALSE}
+# Count of Customer Type
+customer.a <- ggplot(data=sales_data, aes(x=Customer.type, fill=Customer.type)) +
+  geom_bar(color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits=c(0, 550),
+                     breaks=seq(0, 550, by=100),
+                     expand=c(0,0)) +
+  labs(title='Count of Customer Type',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Type')) +
+  theme(legend.text=6) +
+  theme_clean() +
+  theme(legend.position="top")
+
+# Customer Type across Gender
+customer.b <- ggplot(data=sales_data, aes(x=Customer.type, fill=Gender)) +
+  geom_bar(position=position_dodge(), color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0, 300),
+                     breaks=seq(0, 300, by=25),
+                     expand=c(0,0)) +
+  labs(title='Customer Type across Gender',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Gender')) +
+  theme(legend.text=6) +
+  theme_clean() +
+  theme(legend.position="top")
+
+# Customer Type per Store
+customer.c <- ggplot(data=sales_data, aes(x=Branch, fill=Customer.type)) +
+  geom_bar(position=position_dodge(), color='black') +
+  geom_text(stat='count',
+            aes(label=after_stat(count)), 
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits=c(0,200),
+                     breaks=seq(0,200,by=25),
+                     expand=c(0,0)) +
+  labs(title='Customer Type per Store',
+       x='Customer Type', y='Count') +
+  guides(fill=guide_legend(title='Type')) +
+  theme_clean() +
+  theme(legend.position="bottom")
+
+# Customer Type on Gross Income, Grouped by Branch
+customer_type <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                            Customer.Type=sales_data$Customer.type), FUN=sum)
+customer.d <- ggplot(data = customer_type, aes(x = Branch, y = x, fill = Customer.Type)) +
+  geom_bar(stat = 'identity', position = position_dodge(), color = 'black') +
+  geom_text(aes(label = round(x, 2)), position = position_dodge(width = 0.95), vjust = -1, size = 3) +
+  scale_fill_manual(values = c('#1D2739', '#4682B4')) +
+  scale_y_continuous(limits = c(0, 3000), breaks = seq(0, 3000, by = 500), expand = c(0, 0)) +
+  labs(title = 'Gr. Income by Customer Type',
+       subtitle = 'Grouped by Branch') +
+  guides(fill=guide_legend(title='Type')) +
+  theme_clean() +
+  theme(legend.position="bottom")
+
+ggarrange(customer.a, customer.b,
+          ncol=2, nrow=1)
+ggarrange(customer.c, customer.d,
+          ncol=2)
+```
+
+Below, we see gross income produced across the branches, grouped by gender. Although Branches A and B have a roughly equal split of gross income between men and women, Branch C produces more gross income from females than males.
+
+<details>
+  <summary>Click for code</summary>
+```
+gross_income_gender_branch <- aggregate(sales_data$gross.income, by=list(Gender=sales_data$Gender,
+                                                                         Branch=sales_data$Branch), FUN=sum)
+ggplot(data = gross_income_gender_branch, aes(x=Branch, y=x, fill=Gender)) +
+  geom_bar(stat='identity', position=position_dodge(),color='black') +
+  geom_text(aes(label=round(x, 2)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0,3250), breaks=seq(0,3500, 250), expand=c(0,0)) +
+  labs(title='Gross Income by Branch',
+       subtitle='Grouped by Gender') +
+  theme_clean()
+```
+</details>
+
+```{r, echo=FALSE}
+gross_income_gender_branch <- aggregate(sales_data$gross.income, by=list(Gender=sales_data$Gender,
+                                                                         Branch=sales_data$Branch), FUN=sum)
+ggplot(data = gross_income_gender_branch, aes(x=Branch, y=x, fill=Gender)) +
+  geom_bar(stat='identity', position=position_dodge(),color='black') +
+  geom_text(aes(label=round(x, 2)),
+            position=position_dodge(width=0.95),
+            vjust=-1, size=3) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0,3250), breaks=seq(0,3500, 250), expand=c(0,0)) +
+  labs(title='Gross Income by Branch',
+       subtitle='Grouped by Gender') +
+  theme_clean()
+```
+
+Looking deeper into gross income across gender, let's analyze gross income by gender across Product Line and Branches. This will give us a better understanding of what men and women are mainly purchasing at our branches. \
+At Branch A, gross income is highest in the Sports and Travel section for men and Home and Lifestyle goods for women. Gross income is lowest for Fashion Accessories and Health and Beauty products for men and women, respectively. \
+At Branch B, gross income is highest in the Health and Beauty section for men and Food and Beverage for women. Gross income is lowest for Food and Beverage and Health and Beauty for men and women, respectively. \
+At Branch C, gross income is highest in the Health and Beauty section for men and Food and Beverage for women. Gross income is lowest for Sports and Travel and Health and Beauty for men and women, respectively. \
+Also it is interesting to note the larger difference of gross income between men and women at Branch C under the 'Food and Beverage' and 'Sports and Travel' categories. Further data is required to determine what kinds of items women are buying within these categories.
+
+<details>
+  <summary>Click for code</summary>
+```
+# Gross income by product line, Grouped by Branch, faceted by gender
+grid_1 <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                     Product.Line=sales_data$Product.line,
+                                                     Gender=sales_data$Gender), FUN=sum)
+
+ggplot(data=grid_1, aes(x=Gender, y=x, fill=Gender)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0,900), breaks=seq(0,900,200),
+                     expand=c(0,0)) +
+  geom_text(aes(label=round(x,0)),
+            position=position_dodge(width=0.95),
+            vjust=-.5, size=3) +
+  geom_rect(data=subset(grid_1, Product.Line %in% 'Food and beverages' & Branch %in% c('B', 'C')),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  geom_rect(data=subset(grid_1, Product.Line %in% 'Sports and travel' & Branch %in% 'C'),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  facet_grid(Branch ~ Product.Line) +
+  labs(x='Gender', y='Gross Income') +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='gray', linetype='dotted'),
+        panel.grid.major.y=element_line(color='gray', linetype='dotted'),
+        strip.text=element_text(size=7),
+        legend.position="bottom")
+```
+</details>
+
+```{r, echo=FALSE}
+# Gross income by product line, Grouped by Branch, faceted by gender
+grid_1 <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                     Product.Line=sales_data$Product.line,
+                                                     Gender=sales_data$Gender), FUN=sum)
+
+ggplot(data=grid_1, aes(x=Gender, y=x, fill=Gender)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  scale_y_continuous(limits=c(0,900), breaks=seq(0,900,200),
+                     expand=c(0,0)) +
+  geom_text(aes(label=round(x,0)),
+            position=position_dodge(width=0.95),
+            vjust=-.5, size=3) +
+  geom_rect(data=subset(grid_1, Product.Line %in% 'Food and beverages' & Branch %in% c('B', 'C')),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  geom_rect(data=subset(grid_1, Product.Line %in% 'Sports and travel' & Branch %in% 'C'),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  facet_grid(Branch ~ Product.Line) +
+  labs(x='Gender', y='Gross Income') +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='gray', linetype='dotted'),
+        panel.grid.major.y=element_line(color='gray', linetype='dotted'),
+        strip.text=element_text(size=7),
+        legend.position="bottom")
+```
+
+# Product Line Analysis
+From the graphs below, we can better understand ratings across genders, in addition to quantities purchased across categories, grouped by branches. \
+Men generally rate 'Sports and Travel' and 'Electronic Accessories' higher than women, whereas women rate 'Health and Beauty', 'Food and Beverages', and 'Fashion Accessories' higher. 'Home and Lifestyle' is roughly equal in terms of average ratings.
+Looking deeper into quantity sold, Branch A sells the most 'Home and Lifestyle' and 'Sports and Travel' goods. Branch B sells the most 'Health and Beauty' products, whereas Branch C sells the most 'Food and Beverage', 'Fashion Accessories', and 'Electronic Accessories' products.
+
+<details>
+  <summary>Click for code</summary>
+```
+# Product Line Performance
+product.a <- ggplot(data=sales_data, aes(x=Rating, y=Product.line, fill=Gender)) +
+  geom_boxplot(color='black') +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  labs(title='Rating by Product Line',
+       subtitle='Grouped by Gender',
+       x='Rating', y='Produce Line') +
+  theme_clean()
+
+quantity_product <- aggregate(sales_data$Quantity, by=list(Product.Line=sales_data$Product.line,
+                                                           Branch=sales_data$Branch), FUN=sum)
+
+product.b <- ggplot(data=quantity_product, aes(x=x, y=Product.Line, fill=Branch)) +
+  geom_bar(stat='identity', position=position_dodge(),
+           color='black') +
+  labs(title='Quantity by Product Line',
+       subtitle='Grouped by Branch',
+       x='Total Quantity',
+       y='Product Line') +
+  scale_x_continuous(limits=c(0,400),
+                     breaks=seq(0,400,50),
+                     expand=c(0,0)) +
+  scale_fill_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='grey', linetype='dotted'))
+
+ggarrange(product.a, product.b,
+          nrow=2, ncol=1)
+```
+</details>
+
+```{r, echo=FALSE}
+# Product Line Performance
+product.a <- ggplot(data=sales_data, aes(x=Rating, y=Product.line, fill=Gender)) +
+  geom_boxplot(color='black') +
+  scale_fill_manual(values=c('#fea1de', '#2986cc')) +
+  labs(title='Rating by Product Line',
+       subtitle='Grouped by Gender',
+       x='Rating', y='Produce Line') +
+  theme_clean()
+
+quantity_product <- aggregate(sales_data$Quantity, by=list(Product.Line=sales_data$Product.line,
+                                                           Branch=sales_data$Branch), FUN=sum)
+
+product.b <- ggplot(data=quantity_product, aes(x=x, y=Product.Line, fill=Branch)) +
+  geom_bar(stat='identity', position=position_dodge(),
+           color='black') +
+  labs(title='Quantity by Product Line',
+       subtitle='Grouped by Branch',
+       x='Total Quantity',
+       y='Product Line') +
+  scale_x_continuous(limits=c(0,400),
+                     breaks=seq(0,400,50),
+                     expand=c(0,0)) +
+  scale_fill_manual(values=c('#FFCD00', '#43B02A', '#EE2737')) +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='grey', linetype='dotted'))
+
+ggarrange(product.a, product.b,
+          nrow=2, ncol=1)
+```
+
+Taking a look at gross income by product line across the three branches, we see the following: \
+Branch A generates the greatest gross income in Home and Lifestyle and least in Health and Beauty. \
+Branch B generates the greatest gross income in both Health and Beauty and Sports and Travel. Food and Beverages generates the least. \
+Branch C generates gross income largely through Food and Beverage, and the least in Home and Lifestyle. \
+Let's look into quantity sold over time next, to get an idea of when products are selling.
+
+<details>
+  <summary>Click for code</summary>
+```
+# Gross Income per Store Grouped by Product Line
+gross_store_gtype <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                                Product.Line=sales_data$Product.line), FUN=sum)
+ggplot(data=gross_store_gtype, aes(x=Branch, y=x, fill=Product.Line)) +
+  geom_bar(stat='identity',
+           position=position_dodge(),
+           color='black') +
+  scale_y_continuous(limits=c(0,1200),
+                     breaks=seq(0,1200,by=100),
+                     expand=c(0,0)) +
+  labs(title='Gross Income by Branch, Grouped by Product Line',
+       x='Branch', y='Quantity') +
+  theme_clean()
+```
+</details>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Gross Income per Store Grouped by Product Line
+gross_store_gtype <- aggregate(sales_data$gross.income, by=list(Branch=sales_data$Branch,
+                                                                Product.Line=sales_data$Product.line), FUN=sum)
+ggplot(data=gross_store_gtype, aes(x=Branch, y=x, fill=Product.Line)) +
+  geom_bar(stat='identity',
+           position=position_dodge(),
+           color='black') +
+  scale_y_continuous(limits=c(0,1200),
+                     breaks=seq(0,1200,by=100),
+                     expand=c(0,0)) +
+  labs(title='Gross Income by Branch, Grouped by Product Line',
+       x='Branch', y='Quantity') +
+  theme_clean()
+```
+
+
+Peering into quantity sold over time across categories, faceted by branch, we see that all three branches tend to observe an uptick in 'Food and Beverage' after 5 or 6pm, especially Branch C. 
+
+<details>
+  <summary>Click for code</summary>
+```
+grid_2 <- aggregate(sales_data$Quantity, by=list(Branch=sales_data$Branch,
+                                                 Product.Line=sales_data$Product.line,
+                                                 Hour=sales_data$Hour), FUN=sum)
+
+ggplot(data=grid_2, aes(x=Hour, y=x)) +
+  geom_smooth(color='steelblue', linewidth=1, se=FALSE) +
+  scale_x_continuous(limits=c(10,20),
+                     breaks=seq(10,20,by=2)) +
+  scale_y_continuous(limits=c(0,70),
+                     breaks=seq(0,70,by=10)) +
+  geom_rect(data=subset(grid_2, Product.Line %in% 'Food and beverages'),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  facet_grid(Branch ~ Product.Line) +
+  labs(x='Hour', y='Quantity Sold') +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='gray', linetype='dotted'),
+        panel.grid.major.y=element_line(color='gray', linetype='dotted'),
+        strip.text=element_text(size=7))
+```
+</details>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+grid_2 <- aggregate(sales_data$Quantity, by=list(Branch=sales_data$Branch,
+                                                 Product.Line=sales_data$Product.line,
+                                                 Hour=sales_data$Hour), FUN=sum)
+
+ggplot(data=grid_2, aes(x=Hour, y=x)) +
+  geom_smooth(color='steelblue', linewidth=1, se=FALSE) +
+  scale_x_continuous(limits=c(10,20),
+                     breaks=seq(10,20,by=2)) +
+  scale_y_continuous(limits=c(0,70),
+                     breaks=seq(0,70,by=10)) +
+  geom_rect(data=subset(grid_2, Product.Line %in% 'Food and beverages'),
+            fill=NA, color='red', linewidth=2, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  facet_grid(Branch ~ Product.Line) +
+  labs(x='Hour', y='Quantity Sold') +
+  theme_clean() +
+  theme(panel.grid.major.x=element_line(color='gray', linetype='dotted'),
+        panel.grid.major.y=element_line(color='gray', linetype='dotted'),
+        strip.text=element_text(size=7))
+```
+
+\pagebreak
+
+# Payment Method Analysis
+
+By gender, men tend to use Ewallets the most and credit cards the least. The spread among women is tighter, with 18 more transactions that used cash than Ewallets. \
+Gross income tells a similar story, generating the most from Ewallets and Cash by men and women, respectively. \
+
+Across branches, cash is king at Branch C. Cash has the 2nd-highest count of transactions across all branches, following Ewallets at Branch A. Furthermore, cash brings in the greatest gross income at Branch C. \
+
+With members edging out non-members in total gross income generated (\$7820 to \$7559, respectively), we see that normal customers tend to use Ewallets and Cash. Members have a more balanced approach, using all three payment methods relatively similarly. Adhering to this narrative, normal customers bring in the greatest gross income through Ewallets and Cash while members bring in the most via credit cards, but not by a large margin (compared to other payment methods).
+
+<details>
+  <summary>Click for code</summary>
+```
+# Payment across gender
+payment_gender_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Gender=sales_data$Gender), FUN=length)
+payment_gender_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                             Gender=sales_data$Gender), FUN=sum)
+
+payment.a1 <- ggplot(payment_gender_1, aes(x=Gender, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=x), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,200),
+                     breaks=seq(0,200,25),
+                     expand=c(0,0)) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Gender', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.a2 <- ggplot(payment_gender_2, aes(x=Gender, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=round(x,0)), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,3000),
+                     breaks=seq(0,3000,500),
+                     expand=c(0,0)) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Gender', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+# Payment across branch
+payment_branch_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Branch=sales_data$Branch), FUN=length)
+
+payment_branch_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                               Branch=sales_data$Branch), FUN=sum)
+
+payment.b1 <- ggplot(payment_branch_1, aes(x=Branch, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=x), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,150), breaks=seq(0,150,25), expand=c(0,0)) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Branch', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.b2 <- ggplot(payment_branch_2, aes(x=Branch, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=round(x,0)), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,2250), breaks=seq(0,2250,500), expand=c(0,0)) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Branch', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+# Payment across membership type
+payment_membership_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Membership=sales_data$Customer.type), FUN=length)
+payment_membership_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                               Membership=sales_data$Customer.type), FUN=sum)
+
+payment.c1 <- ggplot(payment_membership_1, aes(x=Membership, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=x), stat='identity', position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,210), breaks=seq(0,200,50), expand=c(0,0)) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Branch', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.c2 <- ggplot(payment_membership_2, aes(x=Membership, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  geom_text(aes(label=round(x,0)), stat='identity', position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,3000), breaks=seq(0,3000,500), expand=c(0,0)) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Branch', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+ggarrange(payment.a1, payment.a2, nrow=1, ncol=2)
+ggarrange(payment.b1, payment.b2, nrow=1, ncol=2)
+ggarrange(payment.c1, payment.c2, nrow=1, ncol=2)
+```
+</details>
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Payment across gender
+payment_gender_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Gender=sales_data$Gender), FUN=length)
+payment_gender_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                             Gender=sales_data$Gender), FUN=sum)
+
+payment.a1 <- ggplot(payment_gender_1, aes(x=Gender, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=x), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,200),
+                     breaks=seq(0,200,25),
+                     expand=c(0,0)) +
+  scale_fill_manual(values=c('#4CAF50', '#2196F3', '#9C27B0')) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Gender', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.a2 <- ggplot(payment_gender_2, aes(x=Gender, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=round(x,0)), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,3000),
+                     breaks=seq(0,3000,500),
+                     expand=c(0,0)) +
+  scale_fill_manual(values=c('#4CAF50', '#2196F3', '#9C27B0')) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Gender', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+# Payment across branch
+payment_branch_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Branch=sales_data$Branch), FUN=length)
+
+payment_branch_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                               Branch=sales_data$Branch), FUN=sum)
+
+payment.b1 <- ggplot(payment_branch_1, aes(x=Branch, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=x), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,150), breaks=seq(0,150,25), expand=c(0,0)) +
+  scale_fill_manual(values=c('#4CAF50', '#2196F3', '#9C27B0')) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Branch', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.b2 <- ggplot(payment_branch_2, aes(x=Branch, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=round(x,0)), position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,2250), breaks=seq(0,2250,500), expand=c(0,0)) +
+  scale_fill_manual(values=c('#4CAF50', '#2196F3', '#9C27B0')) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Branch', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+# Payment across membership type
+payment_membership_1 <- aggregate(sales_data$Invoice.ID, by=list(Payment.Type=sales_data$Payment,
+                                                           Membership=sales_data$Customer.type), FUN=length)
+payment_membership_2 <- aggregate(sales_data$gross.income, by=list(Payment.Type=sales_data$Payment,
+                                                               Membership=sales_data$Customer.type), FUN=sum)
+
+payment.c1 <- ggplot(payment_membership_1, aes(x=Membership, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=x), stat='identity', position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,210), breaks=seq(0,200,50), expand=c(0,0)) +
+  scale_fill_manual(values=c('#4CAF50', '#2196F3', '#9C27B0')) +
+  labs(title='Count of Payment Type', subtitle='Grouped by Branch', y='Count') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+payment.c2 <- ggplot(payment_membership_2, aes(x=Membership, y=x, fill=Payment.Type)) +
+  geom_bar(stat='identity', position=position_dodge(), color='black') +
+  geom_text(aes(label=round(x,0)), stat='identity', position=position_dodge(width=0.95), vjust=-1, size=3) +
+  scale_y_continuous(limits=c(0,3000), breaks=seq(0,3000,500), expand=c(0,0)) +
+  scale_fill_manual(values=c('#00C853', '#2196F3', '#9C27B0')) +
+  labs(title='Gross Income by Payment Type', subtitle='Grouped by Branch', y='Gross Income') +
+  theme_clean() +
+  theme(plot.title=element_text(size=10), plot.subtitle=element_text(size=10), legend.position='bottom', legend.title=element_text(size=6), legend.text=element_text(size=6), legend.justification.bottom='left')
+
+ggarrange(payment.a1, payment.a2, nrow=1, ncol=2)
+ggarrange(payment.b1, payment.b2, nrow=1, ncol=2)
+ggarrange(payment.c1, payment.c2, nrow=1, ncol=2)
+```
+
+\pagebreak
+# Next Steps
+In the future, I am interested to prepare a best subsets model to determine a subset of features most important in determining gtoss income or total sales. Given that the dataset is relatively small and has few predictors, this kind of regression is well-suited, additionally considering if relationships are generally linear. \
+Implementing a random forest model to calculate feature importance will be helpful to capture non-linear relationships and more complex interactions, specifically among variables such as customer type, gender, and payment type. \
+Lastly, it would also be interesting to conduct further customer segmentation--looking at customers of specific branches, any patterns of those that buy over/under a specific quantity threshold (across product lines), or taking a deeper dive into member vs non-member customer behaviors.
+
+Thank you for reading!
